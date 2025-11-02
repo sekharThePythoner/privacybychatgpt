@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
+<title>Privacy Glass — Lightweight</title>
+<!-- face-api.js from CDN -->
+<script src="https://unpkg.com/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<style>
+  :root{
+    --bg:#06060a;
+    --card:#0d0f14;
+    --glow:#6ee7ff;
+    --accent:#8b5cf6;
+    --glass: rgba(255,255,255,0.06);
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{background:linear-gradient(180deg,var(--bg) 0%, #0b1220 100%);color:#e6eef8;display:flex;align-items:center;justify-content:center;padding:12px;}
+  .app{
+    width:100%;
+    max-width:820px;
+    height:100%;
+    max-height:900px;
+    position:relative;
+    border-radius:14px;
+    overflow:hidden;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  }
+
+  /* main content that will be blurred */
+  #content{
+    height:100%;
+    width:100%;
+    position:relative;
+    transition: filter 0.45s ease, opacity 0.36s ease;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  header{
+    padding:14px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.02));
+    border-bottom: 1px solid rgba(255,255,255,0.02);
+  }
+  h1{font-size:18px;margin:0;letter-spacing:0.2px;display:flex;align-items:center;gap:8px}
+  h1 .title-glow{filter:drop-shadow(0 8px 24px rgba(110,231,255,0.06));}
+
+  main{padding:18px;display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:flex-start;}
+  .notice{font-size:13px;color:#9fb5cc;text-align:center;max-width:760px;}
+
+  /* floating status */
+  .status{
+    position:fixed;
+    right:14px;
+    bottom:14px;
+    z-index:30;
+    background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    border-radius:999px;padding:10px 14px;display:flex;gap:10px;align-items:center;box-shadow:0 6px 20px rgba(0,0,0,0.5);
+    border:1px solid rgba(255,255,255,0.03);
+    backdrop-filter: blur(6px);
+  }
+  .dot{width:10px;height:10px;border-radius:50%;}
+  .dot.green{background:#22c55e;box-shadow:0 6px 18px rgba(34,197,94,0.12);}
+  .dot.red{background:#ef4444;box-shadow:0 6px 18px rgba(239,68,68,0.12);}
+  .stat-text{font-size:13px;color:#e6eef8;white-space:nowrap}
+
+  /* detection circle */
+  .detector-wrap{width:210px;height:210px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));box-shadow:0 10px 40px rgba(8,10,15,0.6);position:relative;overflow:hidden;border:2px solid rgba(255,255,255,0.04);}
+  .detector-glow{position:absolute;inset:0;border-radius:50%;box-shadow:0 0 40px 8px rgba(139,92,246,0.06), 0 0 24px 4px rgba(110,231,255,0.03);pointer-events:none;z-index:1;}
+  video#preview{width:100%;height:100%;object-fit:cover;border-radius:50%;transform:scaleX(-1);} /* mirror */
+  .detector-text{margin-top:8px;font-size:14px;color:#a9c6db;text-align:center;}
+
+  /* overlay when locked */
+  .lock-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:20;pointer-events:none;opacity:0;transition:opacity .35s ease;}
+  .overlay-panel{background:linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:18px 22px;border-radius:12px;border:1px solid rgba(255,255,255,0.03);backdrop-filter: blur(6px);display:flex;flex-direction:column;gap:8px;align-items:center;}
+  .overlay-panel strong{font-size:16px}
+  .overlay-panel p{margin:0;color:#c9e0f1;font-size:13px}
+
+  /* controls */
+  .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
+  button.btn{background:linear-gradient(90deg,var(--glow),var(--accent));border:none;color:#00101a;padding:10px 14px;border-radius:10px;font-weight:600;box-shadow:0 8px 28px rgba(139,92,246,0.07);cursor:pointer}
+  button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);color:#bcd3ea;padding:10px 12px;border-radius:10px}
+
+  footer{position:absolute;left:12px;bottom:12px;font-size:12px;color:#8fb0c8}
+
+  /* responsive */
+  @media (max-width:420px){
+    .detector-wrap{width:170px;height:170px;}
+    .detector-text{font-size:13px;}
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <div id="content">
+    <header>
+      <h1><span class="title-glow">🔒</span> Privacy Glass</h1>
+      <div style="font-size:13px;color:#9fb5cc">Mobile — Online models</div>
+    </header>
+
+    <main>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+        <!-- Detector circle -->
+        <div id="setup-area" style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div class="detector-wrap" id="detector">
+            <div class="detector-glow"></div>
+            <!-- mirrored live preview inside circle -->
+            <video id="preview" autoplay muted playsinline></video>
+          </div>
+          <div class="detector-text" id="detectorText">Allow camera and align your face inside the circle</div>
+        </div>
+
+        <div class="controls" id="controls">
+          <button class="btn" id="saveFaceBtn">Save Face (Lock)</button>
+          <button class="ghost" id="scanAgainBtn">Scan Again</button>
+          <button class="ghost" id="toggleBtn">Pause Detection</button>
+        </div>
+
+        <div class="notice">
+          Once you save your face, Privacy Glass will stay active as long as this tab is open. If an unknown person or no face is detected, the screen will blur automatically.
+        </div>
+      </div>
+    </main>
+    <footer>Made for mobile • Models loaded from CDN</footer>
+  </div>
+
+  <!-- Lock overlay that appears when unauthorized -->
+  <div class="lock-overlay" id="overlay">
+    <div class="overlay-panel">
+      <strong id="overlayTitle">👀 Someone’s peeking!</strong>
+      <p id="overlayMsg">Privacy Glass has blurred the screen — authorized face not found.</p>
+    </div>
+  </div>
+
+  <!-- status bubble -->
+  <div class="status" id="status">
+    <div class="dot green" id="statusDot"></div>
+    <div class="stat-text" id="statusText">Idle</div>
+  </div>
+
+</div>
+
+<script>
+(async function(){
+  // Config
+  const MODEL_URL = 'https://unpkg.com/face-api.js@0.22.2/weights';
+  const MATCH_THRESHOLD = 0.5; // smaller -> stricter
+  const CHECK_INTERVAL = 800; // ms
+  const BLUR_STYLE = 'blur(10px) saturate(0.85)';
+
+  // Elements
+  const video = document.getElementById('preview');
+  const detectorText = document.getElementById('detectorText');
+  const saveFaceBtn = document.getElementById('saveFaceBtn');
+  const scanAgainBtn = document.getElementById('scanAgainBtn');
+  const toggleBtn = document.getElementById('toggleBtn');
+  const overlay = document.getElementById('overlay');
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  const content = document.getElementById('content');
+
+  let stream = null;
+  let detectionInterval = null;
+  let paused = false;
+  let authorizedDescriptor = null;
+  let faceMatcher = null;
+
+  // util: show status
+  function setStatus(text, ok=true){
+    statusText.textContent = text;
+    statusDot.className = 'dot ' + (ok ? 'green' : 'red');
+  }
+
+  // Load models
+  detectorText.textContent = 'Loading models...';
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+  detectorText.textContent = 'Models loaded • allow camera';
+
+  // start camera
+  async function startCamera(){
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 360, height: 360 }, audio: false });
+      video.srcObject = stream;
+      await video.play();
+      detectorText.textContent = 'Position your face inside the circle';
+      // small shimmer while detecting
+      video.style.filter = 'brightness(1.03)';
+    }catch(e){
+      detectorText.textContent = 'Camera access denied or not supported';
+      setStatus('Camera permission required', false);
+      console.error(e);
+    }
+  }
+
+  // stop camera
+  function stopCamera(){
+    if(stream){
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+
+  // face detection helper (returns descriptor if face found)
+  async function detectSingleFaceDescriptor(){
+    if(!video || video.readyState < 2) return null;
+    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 });
+    const result = await faceapi.detectSingleFace(video, options).withFaceLandmarks(true).withFaceDescriptor();
+    if(!result) return null;
+    return result.descriptor;
+  }
+
+  // save authorized face descriptor to localStorage
+  function saveDescriptor(descriptor){
+    try{
+      const arr = Array.from(descriptor);
+      localStorage.setItem('privacy_glass_face', JSON.stringify(arr));
+      authorizedDescriptor = new Float32Array(arr);
+      faceMatcher = new faceapi.FaceMatcher(new faceapi.LabeledFaceDescriptors('authorized', [authorizedDescriptor]), MATCH_THRESHOLD);
+      setStatus('Authorized face saved', true);
+      detectorText.textContent = 'Authorized face saved. Detection active.';
+    }catch(e){
+      console.error(e);
+      setStatus('Save failed', false);
+    }
+  }
+
+  // load descriptor if exists
+  function loadDescriptor(){
+    const raw = localStorage.getItem('privacy_glass_face');
+    if(!raw) return false;
+    try{
+      const arr = JSON.parse(raw);
+      authorizedDescriptor = new Float32Array(arr);
+      faceMatcher = new faceapi.FaceMatcher(new faceapi.LabeledFaceDescriptors('authorized', [authorizedDescriptor]), MATCH_THRESHOLD);
+      return true;
+    }catch(e){
+      return false;
+    }
+  }
+
+  // show overlay lock
+  function lockScreen(){
+    content.style.filter = BLUR_STYLE;
+    overlay.style.opacity = '1';
+    setStatus('Locked — unknown face', false);
+  }
+  // unlock
+  function unlockScreen(){
+    content.style.filter = 'none';
+    overlay.style.opacity = '0';
+    setStatus('Unlocked — authorized', true);
+  }
+
+  // core loop for detection
+  async function startDetectionLoop(){
+    if(detectionInterval) clearInterval(detectionInterval);
+    detectionInterval = setInterval(async ()=>{
+      if(paused) return;
+      if(!authorizedDescriptor){
+        // if not saved -> show scanning prompt
+        detectorText.textContent = 'No authorized face — please Save Face';
+        setStatus('No face saved', false);
+        return;
+      }
+      const descriptor = await detectSingleFaceDescriptor();
+      if(!descriptor){
+        // no face in frame
+        lockScreen();
+        detectorText.textContent = 'No face detected';
+        return;
+      }
+      // compare
+      const best = faceMatcher.findBestMatch(descriptor);
+      if(best && best.label === 'authorized' && best.distance <= MATCH_THRESHOLD){
+        // authorized
+        unlockScreen();
+        detectorText.textContent = 'Welcome back 😎';
+      } else {
+        lockScreen();
+        detectorText.textContent = 'Unknown face detected';
+      }
+    }, CHECK_INTERVAL);
+  }
+
+  // UI events
+  saveFaceBtn.addEventListener('click', async ()=>{
+    setStatus('Capturing face...', false);
+    detectorText.textContent = 'Hold still — capturing face';
+    // capture a few frames and average descriptors for stability
+    const samples = [];
+    for(let i=0;i<3;i++){
+      const d = await detectSingleFaceDescriptor();
+      if(d) samples.push(d);
+      await new Promise(r => setTimeout(r, 350));
+    }
+    if(samples.length === 0){
+      detectorText.textContent = 'No face found — try again';
+      setStatus('No face found', false);
+      return;
+    }
+    // average descriptors
+    const avg = new Float32Array(samples[0].length);
+    for(let i=0;i<avg.length;i++){
+      let s = 0;
+      for(const sp of samples) s += sp[i];
+      avg[i] = s / samples.length;
+    }
+    saveDescriptor(avg);
+    // after saving start detection loop
+    startDetectionLoop();
+  });
+
+  scanAgainBtn.addEventListener('click', async ()=>{
+    detectorText.textContent = 'Rescanning...';
+    await startCamera();
+    setTimeout(()=> detectorText.textContent = 'Align your face inside the circle', 700);
+  });
+
+  toggleBtn.addEventListener('click', ()=>{
+    paused = !paused;
+    toggleBtn.textContent = paused ? 'Resume Detection' : 'Pause Detection';
+    setStatus(paused ? 'Paused' : 'Detecting', !paused);
+    if(paused) { content.style.filter = 'none'; overlay.style.opacity = '0'; }
+  });
+
+  // handle tab visibility - pause detection when tab hidden to save battery
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.hidden){
+      paused = true;
+      setStatus('Paused (tab hidden)', false);
+    }else{
+      paused = false;
+      setStatus('Active', true);
+    }
+  });
+
+  // triple-tap to toggle quick lock/unlock (simple)
+  let tapTimes = [];
+  window.addEventListener('touchend', (e)=>{
+    const t = Date.now();
+    tapTimes.push(t);
+    // keep only recent 3
+    if(tapTimes.length > 3) tapTimes.shift();
+    if(tapTimes.length === 3 && (tapTimes[2] - tapTimes[0]) < 700){
+      // triple tap detected
+      if(content.style.filter && content.style.filter !== 'none'){
+        unlockScreen();
+      } else {
+        lockScreen();
+      }
+      tapTimes = [];
+    }
+  });
+
+  // init camera & load descriptor
+  await startCamera();
+  const loaded = loadDescriptor();
+  if(loaded){
+    detectorText.textContent = 'Authorized face loaded • detection active';
+    setStatus('Active', true);
+    // start detection loop after small delay
+    setTimeout(()=> startDetectionLoop(), 700);
+  } else {
+    setStatus('Ready to save face', false);
+  }
+
+  // cleanup on page unload
+  window.addEventListener('beforeunload', ()=> {
+    stopCamera();
+    if(detectionInterval) clearInterval(detectionInterval);
+  });
+
+})();
+</script>
+</body>
+</html>
